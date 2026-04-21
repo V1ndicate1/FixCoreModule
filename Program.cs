@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
 const string RELATIVE_PATH = @"MelonLoader\Il2CppAssemblies\UnityEngine.CoreModule.dll";
@@ -12,94 +13,164 @@ Console.WriteLine("FixCoreModule — MelonLoader duplicate type fix");
 Console.WriteLine("https://github.com/LavaGang/MelonLoader/issues/1142");
 Console.WriteLine();
 
-string dllPath = FindDllPath();
+// Collect all affected DLL paths
+var affectedPaths = FindAllAffectedPaths();
 
-if (dllPath == null)
+if (affectedPaths.Count == 0)
 {
-    Console.WriteLine("Could not locate the DLL automatically.");
-    Console.WriteLine(@"Please enter the full path to your game folder:");
-    Console.WriteLine(@"  e.g.  C:\Program Files (x86)\Steam\steamapps\common\My Game");
-    Console.Write("> ");
-    string input = Console.ReadLine()?.Trim().Trim('"') ?? "";
-    string candidate = Path.Combine(input, RELATIVE_PATH);
+    Console.WriteLine("No affected games found automatically.");
+    Console.WriteLine();
+
+    string gamePath = null;
+
+    // Try native folder picker on Windows
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
+        Console.WriteLine("Opening folder picker — select your game folder...");
+        gamePath = OpenFolderPicker();
+    }
+
+    // Fall back to manual input
+    if (string.IsNullOrEmpty(gamePath))
+    {
+        Console.WriteLine(@"Enter the full path to your game folder:");
+        Console.WriteLine(@"  e.g.  C:\Program Files (x86)\Steam\steamapps\common\My Game");
+        Console.Write("> ");
+        gamePath = Console.ReadLine()?.Trim().Trim('"') ?? "";
+    }
+
+    string candidate = Path.Combine(gamePath, RELATIVE_PATH);
     if (File.Exists(candidate))
-        dllPath = candidate;
+        affectedPaths.Add(candidate);
     else
     {
         Console.WriteLine($"File not found at: {candidate}");
+        Console.WriteLine("Make sure the game has MelonLoader installed.");
         Console.WriteLine("Press any key to exit.");
         Console.ReadKey();
         return;
     }
 }
 
-Console.WriteLine($"Found: {dllPath}");
-Console.WriteLine();
+int fixed_ = 0;
+int skipped = 0;
+int failed = 0;
 
-var backupPath = dllPath + ".bak";
-var tempPath   = dllPath + ".tmp";
+foreach (string dllPath in affectedPaths)
+{
+    string gameName = Path.GetFileName(Path.GetDirectoryName(
+        Path.GetDirectoryName(Path.GetDirectoryName(dllPath))));
 
-byte[] bytes;
-try
-{
-    bytes = File.ReadAllBytes(dllPath);
-}
-catch (IOException)
-{
-    Console.WriteLine("ERROR: Could not read the DLL — is the game still running?");
-    Console.WriteLine("Close the game and try again.");
+    Console.WriteLine($"── {gameName} ──");
+    Console.WriteLine($"  {dllPath}");
+
+    // Ask permission before touching each game
+    Console.Write($"  Fix this game? [Y/n] ");
+    var key = Console.ReadKey();
     Console.WriteLine();
-    Console.WriteLine("Press any key to exit.");
-    Console.ReadKey();
-    return;
-}
 
-bool hasDuplicates = ScanForDuplicates(bytes, verbose: true);
-Console.WriteLine();
+    if (key.Key != ConsoleKey.Y && key.Key != ConsoleKey.Enter)
+    {
+        Console.WriteLine("  Skipped.");
+        Console.WriteLine();
+        skipped++;
+        continue;
+    }
 
-if (!hasDuplicates)
-    Console.WriteLine("DLL is already clean. Running Cecil round-trip to ensure clean PE...");
-else
-    Console.WriteLine("Duplicates found — running Cecil round-trip to fix...");
+    if (!FixDll(dllPath))
+        failed++;
+    else
+        fixed_++;
 
-CecilFix.Run(dllPath, tempPath);
-
-try
-{
-    File.Copy(dllPath, backupPath, overwrite: true);
-    File.Delete(dllPath);
-    File.Move(tempPath, dllPath);
-}
-catch (IOException)
-{
-    // Clean up temp file if we managed to create it
-    if (File.Exists(tempPath)) File.Delete(tempPath);
-    Console.WriteLine("ERROR: Could not write the patched DLL — is the game still running?");
-    Console.WriteLine("Close the game and try again.");
     Console.WriteLine();
-    Console.WriteLine("Press any key to exit.");
-    Console.ReadKey();
-    return;
 }
 
-Console.WriteLine($"Original backed up to: {backupPath}");
-
-bool stillDirty = ScanForDuplicates(File.ReadAllBytes(dllPath), verbose: false);
-Console.WriteLine(stillDirty
-    ? "WARNING: duplicates still present after Cecil pass!"
-    : "UnityEngine.CoreModule.dll rewritten cleanly.");
-
-Console.WriteLine();
-Console.WriteLine("Done! Press any key to exit.");
+Console.WriteLine($"Done! Fixed: {fixed_}, Skipped: {skipped}, Failed: {failed}");
+Console.WriteLine("Press any key to exit.");
 Console.ReadKey();
 
-// ── Path discovery ────────────────────────────────────────────────────────────
+// ── Fix a single DLL ─────────────────────────────────────────────────────────
 
-static string FindDllPath()
+static bool FixDll(string dllPath)
 {
+    var backupPath = dllPath + ".bak";
+    var tempPath   = dllPath + ".tmp";
+
+    byte[] bytes;
+    try
+    {
+        bytes = File.ReadAllBytes(dllPath);
+    }
+    catch (IOException)
+    {
+        Console.WriteLine("  ERROR: Could not read the DLL — is the game still running?");
+        return false;
+    }
+
+    bool hasDuplicates = ScanForDuplicates(bytes, verbose: true);
+
+    if (!hasDuplicates)
+    {
+        Console.WriteLine("  DLL is already clean — nothing to do.");
+        return true;
+    }
+
+    Console.WriteLine("  Duplicates found — fixing...");
+
+    try
+    {
+        CecilFix.Run(dllPath, tempPath);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  ERROR: Cecil failed — {ex.Message}");
+        if (File.Exists(tempPath)) try { File.Delete(tempPath); } catch { }
+        return false;
+    }
+
+    try
+    {
+        File.Copy(dllPath, backupPath, overwrite: true);
+        File.Delete(dllPath);
+        File.Move(tempPath, dllPath);
+    }
+    catch (IOException)
+    {
+        if (File.Exists(tempPath)) try { File.Delete(tempPath); } catch { }
+        Console.WriteLine("  ERROR: Could not write the patched DLL — is the game still running?");
+        return false;
+    }
+
+    Console.WriteLine($"  Backup saved: {backupPath}");
+
+    bool stillDirty = ScanForDuplicates(File.ReadAllBytes(dllPath), verbose: false);
+    Console.WriteLine(stillDirty
+        ? "  WARNING: duplicates still present after fix!"
+        : "  Fixed successfully.");
+    return !stillDirty;
+}
+
+// ── Path discovery ───────────────────────────────────────────────────────────
+
+static List<string> FindAllAffectedPaths()
+{
+    var results = new List<string>();
+
     // 1. Check if the tool is placed directly in a game folder
     string localCandidate = Path.Combine(AppContext.BaseDirectory, RELATIVE_PATH);
-    if (File.Exists(localCandidate)) return localCandidate;
+    if (File.Exists(localCandidate))
+    {
+        try
+        {
+            byte[] data = File.ReadAllBytes(localCandidate);
+            if (ScanForDuplicates(data, verbose: false))
+            {
+                Console.WriteLine($"Found affected game: {Path.GetFileName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))}");
+                results.Add(localCandidate);
+            }
+        }
+        catch { /* unreadable — skip */ }
+    }
 
     // 2. Gather Steam library roots
     var libraryRoots = new List<string>
@@ -150,25 +221,60 @@ static string FindDllPath()
             foreach (string gameDir in Directory.GetDirectories(root))
             {
                 string candidate = Path.Combine(gameDir, RELATIVE_PATH);
-                if (File.Exists(candidate))
+                if (!File.Exists(candidate)) continue;
+
+                // Skip if we already found this path (e.g. local candidate)
+                if (results.Contains(candidate)) continue;
+
+                try
                 {
-                    // Quick check: does this DLL actually have duplicates?
                     byte[] data = File.ReadAllBytes(candidate);
                     if (ScanForDuplicates(data, verbose: false))
                     {
                         Console.WriteLine($"Found affected game: {Path.GetFileName(gameDir)}");
-                        return candidate;
+                        results.Add(candidate);
                     }
                 }
+                catch { /* unreadable — skip */ }
             }
         }
         catch { /* access denied — skip */ }
     }
 
-    return null;
+    return results;
 }
 
-// ── Duplicate scanner ─────────────────────────────────────────────────────────
+// ── Folder picker (Windows) ──────────────────────────────────────────────────
+
+static string OpenFolderPicker()
+{
+    try
+    {
+        // Use PowerShell to show a native folder browser dialog — no extra dependencies
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "powershell",
+            Arguments = "-NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; " +
+                        "$f = New-Object System.Windows.Forms.FolderBrowserDialog; " +
+                        "$f.Description = 'Select your game folder'; " +
+                        "$f.ShowNewFolderButton = $false; " +
+                        "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }\"",
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        var proc = System.Diagnostics.Process.Start(psi);
+        string result = proc.StandardOutput.ReadToEnd().Trim();
+        proc.WaitForExit();
+        return string.IsNullOrEmpty(result) ? null : result;
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+// ── Duplicate scanner ────────────────────────────────────────────────────────
 
 static bool ScanForDuplicates(byte[] data, bool verbose)
 {
@@ -185,7 +291,7 @@ static bool ScanForDuplicates(byte[] data, bool verbose)
         string fqn = $"{meta.GetString(td.Namespace)}.{meta.GetString(td.Name)}".TrimStart('.');
         if (!topSeen.Add(fqn))
         {
-            if (verbose) Console.WriteLine($"  Top-level duplicate: {fqn}");
+            if (verbose) Console.WriteLine($"    Top-level duplicate: {fqn}");
             found = true;
         }
     }
@@ -204,7 +310,7 @@ static bool ScanForDuplicates(byte[] data, bool verbose)
             if (verbose)
             {
                 var outer = meta.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(encRid));
-                Console.WriteLine($"  Nested duplicate '{name}' in '{meta.GetString(outer.Name)}'");
+                Console.WriteLine($"    Nested duplicate '{name}' in '{meta.GetString(outer.Name)}'");
             }
             found = true;
         }
