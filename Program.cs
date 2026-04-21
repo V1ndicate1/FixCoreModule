@@ -39,7 +39,20 @@ Console.WriteLine();
 var backupPath = dllPath + ".bak";
 var tempPath   = dllPath + ".tmp";
 
-byte[] bytes = File.ReadAllBytes(dllPath);
+byte[] bytes;
+try
+{
+    bytes = File.ReadAllBytes(dllPath);
+}
+catch (IOException)
+{
+    Console.WriteLine("ERROR: Could not read the DLL — is the game still running?");
+    Console.WriteLine("Close the game and try again.");
+    Console.WriteLine();
+    Console.WriteLine("Press any key to exit.");
+    Console.ReadKey();
+    return;
+}
 
 bool hasDuplicates = ScanForDuplicates(bytes, verbose: true);
 Console.WriteLine();
@@ -50,9 +63,25 @@ else
     Console.WriteLine("Duplicates found — running Cecil round-trip to fix...");
 
 CecilFix.Run(dllPath, tempPath);
-File.Copy(dllPath, backupPath, overwrite: true);
-File.Delete(dllPath);
-File.Move(tempPath, dllPath);
+
+try
+{
+    File.Copy(dllPath, backupPath, overwrite: true);
+    File.Delete(dllPath);
+    File.Move(tempPath, dllPath);
+}
+catch (IOException)
+{
+    // Clean up temp file if we managed to create it
+    if (File.Exists(tempPath)) File.Delete(tempPath);
+    Console.WriteLine("ERROR: Could not write the patched DLL — is the game still running?");
+    Console.WriteLine("Close the game and try again.");
+    Console.WriteLine();
+    Console.WriteLine("Press any key to exit.");
+    Console.ReadKey();
+    return;
+}
+
 Console.WriteLine($"Original backed up to: {backupPath}");
 
 bool stillDirty = ScanForDuplicates(File.ReadAllBytes(dllPath), verbose: false);
