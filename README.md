@@ -7,11 +7,13 @@ This affects **all Unity games** using MelonLoader with Il2Cpp — not just one 
 ## How to use
 
 1. Close the game
-2. Download `FixCoreModule.exe` from the [latest release](https://github.com/V1ndicate1/FixCoreModule/releases/latest)
-3. Place it in your game folder and run it
+2. Download `FixCoreModule-v*.zip` from the [latest release](https://github.com/V1ndicate1/FixCoreModule/releases/latest) and extract it
+3. Run `FixCoreModule.exe`
 4. Launch the game
 
-The tool automatically finds and patches `UnityEngine.CoreModule.dll` in your MelonLoader assemblies folder. A backup is saved as `.bak`. If the game updates and the error returns, run it again.
+The tool automatically scans your Steam libraries and finds affected games — you can run it from anywhere. If auto-detection fails, it will prompt you to enter your game folder path.
+
+A backup of the original DLL is saved as `.bak`. If the game updates and the error returns, run it again.
 
 ## What it does
 
@@ -30,7 +32,7 @@ If auto-detection fails, it prompts you to enter the game folder path manually.
 
 ## Build from source
 
-Requires [.NET 6 SDK](https://dotnet.microsoft.com/download/dotnet/6.0).
+Requires [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
 ```
 dotnet build -c Release
@@ -51,3 +53,5 @@ MIT License. See [LICENSE](LICENSE).
 | Library | License | Author |
 |---------|---------|--------|
 | [Mono.Cecil](https://github.com/jbevain/cecil) | MIT | Jb Evain |
+
+See [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) for full license texts.

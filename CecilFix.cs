@@ -8,10 +8,10 @@ public static class CecilFix
     public static void Run(string inputPath, string outputPath)
     {
         var bytes = File.ReadAllBytes(inputPath);
-        var ms    = new MemoryStream(bytes);
+        using var ms = new MemoryStream(bytes);
         var resolver = new DefaultAssemblyResolver();
         resolver.AddSearchDirectory(Path.GetDirectoryName(inputPath));
-        var asm = AssemblyDefinition.ReadAssembly(ms, new ReaderParameters { AssemblyResolver = resolver });
+        using var asm = AssemblyDefinition.ReadAssembly(ms, new ReaderParameters { AssemblyResolver = resolver });
 
         int removed = RemoveFrom(asm.MainModule.Types, "top-level");
         foreach (TypeDefinition t in asm.MainModule.Types)
@@ -19,7 +19,6 @@ public static class CecilFix
 
         Console.WriteLine($"Cecil: removed {removed} duplicate type definition(s)");
         asm.Write(outputPath);
-        ms.Dispose();
     }
 
     static int RemoveFrom(Mono.Collections.Generic.Collection<TypeDefinition> col, string ctx)

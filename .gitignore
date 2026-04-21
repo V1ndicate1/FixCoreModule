@@ -2,4 +2,6 @@ bin/
 obj/
 publish/
 publish_fd/
+publish_single/
 *.user
+*.zip
