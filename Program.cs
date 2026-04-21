@@ -9,7 +9,8 @@ using Microsoft.Win32;
 
 const string RELATIVE_PATH = @"MelonLoader\Il2CppAssemblies\UnityEngine.CoreModule.dll";
 
-Console.WriteLine("https://github.com/V1ndicate1/FixCoreModule");
+Console.WriteLine("FixCoreModule — MelonLoader duplicate type fix");
+Console.WriteLine("https://github.com/LavaGang/MelonLoader/issues/1142");
 Console.WriteLine();
 
 // Collect all affected DLL paths
