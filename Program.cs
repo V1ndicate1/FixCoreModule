@@ -244,29 +244,27 @@ static List<string> FindAllAffectedPaths()
     return results;
 }
 
-// ── Folder picker (Windows) ──────────────────────────────────────────────────
+// ── Folder picker (Windows COM) ──────────────────────────────────────────────
 
 static string OpenFolderPicker()
 {
+    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return null;
+
     try
     {
-        // Use PowerShell to show a native folder browser dialog — no extra dependencies
-        var psi = new System.Diagnostics.ProcessStartInfo
+        // Use SHBrowseForFolder via P/Invoke — no PowerShell, no external processes
+        var bi = new BrowseInfo
         {
-            FileName = "powershell",
-            Arguments = "-NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; " +
-                        "$f = New-Object System.Windows.Forms.FolderBrowserDialog; " +
-                        "$f.Description = 'Select your game folder'; " +
-                        "$f.ShowNewFolderButton = $false; " +
-                        "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }\"",
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            lpszTitle = "Select your game folder",
+            ulFlags = 0x00000040 | 0x00000010, // BIF_NEWDIALOGSTYLE | BIF_EDITBOX
         };
-        var proc = System.Diagnostics.Process.Start(psi);
-        string result = proc.StandardOutput.ReadToEnd().Trim();
-        proc.WaitForExit();
-        return string.IsNullOrEmpty(result) ? null : result;
+        IntPtr pidl = NativeMethods.SHBrowseForFolder(ref bi);
+        if (pidl == IntPtr.Zero) return null;
+
+        var path = new char[260];
+        bool ok = NativeMethods.SHGetPathFromIDList(pidl, path);
+        Marshal.FreeCoTaskMem(pidl);
+        return ok ? new string(path).TrimEnd('\0') : null;
     }
     catch
     {
@@ -316,4 +314,28 @@ static bool ScanForDuplicates(byte[] data, bool verbose)
         }
     }
     return found;
+}
+
+// ── Win32 P/Invoke for folder picker ─────────────────────────────────────────
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+struct BrowseInfo
+{
+    public IntPtr hwndOwner;
+    public IntPtr pidlRoot;
+    public string pszDisplayName;
+    public string lpszTitle;
+    public uint ulFlags;
+    public IntPtr lpfn;
+    public IntPtr lParam;
+    public int iImage;
+}
+
+static class NativeMethods
+{
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SHBrowseForFolder(ref BrowseInfo lpbi);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool SHGetPathFromIDList(IntPtr pidl, [Out] char[] pszPath);
 }
