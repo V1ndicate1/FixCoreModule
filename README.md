@@ -1,6 +1,6 @@
 # FixCoreModule
 
-Fixes the `Duplicate type '<>O'` crash caused by [MelonLoader 0.7.2](https://github.com/LavaGang/MelonLoader/issues/1142) on fresh installs.
+Fixes the `Duplicate type '<>O'` crash caused by [MelonLoader 0.7.2](https://github.com/V1ndicate1/FixCoreModule) on fresh installs.
 
 This affects **all Unity games** using MelonLoader with Il2Cpp — not just one specific game. If MelonLoader crashes on first launch with a duplicate type error, this tool fixes it.
 
