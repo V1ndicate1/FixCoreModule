@@ -253,18 +253,27 @@ static string OpenFolderPicker()
     try
     {
         // Use SHBrowseForFolder via P/Invoke — no PowerShell, no external processes
-        var bi = new BrowseInfo
+        IntPtr displayBuf = Marshal.AllocCoTaskMem(260 * 2);
+        try
         {
-            lpszTitle = "Select your game folder",
-            ulFlags = 0x00000040 | 0x00000010, // BIF_NEWDIALOGSTYLE | BIF_EDITBOX
-        };
-        IntPtr pidl = NativeMethods.SHBrowseForFolder(ref bi);
-        if (pidl == IntPtr.Zero) return null;
+            var bi = new BrowseInfo
+            {
+                pszDisplayName = displayBuf,
+                lpszTitle = "Select your game folder",
+                ulFlags = 0x00000040 | 0x00000010, // BIF_NEWDIALOGSTYLE | BIF_EDITBOX
+            };
+            IntPtr pidl = NativeMethods.SHBrowseForFolder(ref bi);
+            if (pidl == IntPtr.Zero) return null;
 
-        var path = new char[260];
-        bool ok = NativeMethods.SHGetPathFromIDList(pidl, path);
-        Marshal.FreeCoTaskMem(pidl);
-        return ok ? new string(path).TrimEnd('\0') : null;
+            var path = new char[260];
+            bool ok = NativeMethods.SHGetPathFromIDList(pidl, path);
+            Marshal.FreeCoTaskMem(pidl);
+            return ok ? new string(path).TrimEnd('\0') : null;
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(displayBuf);
+        }
     }
     catch
     {
@@ -323,7 +332,7 @@ struct BrowseInfo
 {
     public IntPtr hwndOwner;
     public IntPtr pidlRoot;
-    public string pszDisplayName;
+    public IntPtr pszDisplayName;
     public string lpszTitle;
     public uint ulFlags;
     public IntPtr lpfn;
