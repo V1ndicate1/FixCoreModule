@@ -45,6 +45,10 @@ For a self-contained exe (no .NET runtime required on target machine):
 dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 ```
 
+## Credits
+
+Developed with AI assistance (Claude)
+
 ## License
 
 MIT License. See [LICENSE](LICENSE).

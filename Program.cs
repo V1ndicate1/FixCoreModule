@@ -250,35 +250,42 @@ static string OpenFolderPicker()
 {
     if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return null;
 
-    try
+    // SHBrowseForFolder requires an STA thread — console apps default to MTA
+    string result = null;
+    var thread = new System.Threading.Thread(() =>
     {
-        // Use SHBrowseForFolder via P/Invoke — no PowerShell, no external processes
-        IntPtr displayBuf = Marshal.AllocCoTaskMem(260 * 2);
         try
         {
-            var bi = new BrowseInfo
+            NativeMethods.OleInitialize(IntPtr.Zero);
+            IntPtr displayBuf = Marshal.AllocCoTaskMem(260 * 2);
+            try
             {
-                pszDisplayName = displayBuf,
-                lpszTitle = "Select your game folder",
-                ulFlags = 0x00000040 | 0x00000010, // BIF_NEWDIALOGSTYLE | BIF_EDITBOX
-            };
-            IntPtr pidl = NativeMethods.SHBrowseForFolder(ref bi);
-            if (pidl == IntPtr.Zero) return null;
+                var bi = new BrowseInfo
+                {
+                    pszDisplayName = displayBuf,
+                    lpszTitle = "Select your game folder",
+                    ulFlags = 0x00000040 | 0x00000010, // BIF_NEWDIALOGSTYLE | BIF_EDITBOX
+                };
+                IntPtr pidl = NativeMethods.SHBrowseForFolder(ref bi);
+                if (pidl == IntPtr.Zero) return;
 
-            var path = new char[260];
-            bool ok = NativeMethods.SHGetPathFromIDList(pidl, path);
-            Marshal.FreeCoTaskMem(pidl);
-            return ok ? new string(path).TrimEnd('\0') : null;
+                var path = new char[260];
+                bool ok = NativeMethods.SHGetPathFromIDList(pidl, path);
+                Marshal.FreeCoTaskMem(pidl);
+                if (ok) result = new string(path).TrimEnd('\0');
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(displayBuf);
+                NativeMethods.OleUninitialize();
+            }
         }
-        finally
-        {
-            Marshal.FreeCoTaskMem(displayBuf);
-        }
-    }
-    catch
-    {
-        return null;
-    }
+        catch { }
+    });
+    thread.SetApartmentState(System.Threading.ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    return result;
 }
 
 // ── Duplicate scanner ────────────────────────────────────────────────────────
@@ -347,4 +354,10 @@ static class NativeMethods
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     public static extern bool SHGetPathFromIDList(IntPtr pidl, [Out] char[] pszPath);
+
+    [DllImport("ole32.dll")]
+    public static extern int OleInitialize(IntPtr pvReserved);
+
+    [DllImport("ole32.dll")]
+    public static extern void OleUninitialize();
 }
