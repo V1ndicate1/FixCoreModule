@@ -7,7 +7,10 @@ using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
-const string RELATIVE_PATH = @"MelonLoader\Il2CppAssemblies\UnityEngine.CoreModule.dll";
+// Built with Path.Combine so the separator matches the host OS ('\' on Windows,
+// '/' on Linux/macOS). A hardcoded literal with '\' would not be normalized on
+// Unix, where '\' is an ordinary filename character.
+string RELATIVE_PATH = GamePaths.RelativeCoreModule;
 
 Console.WriteLine("FixCoreModule — MelonLoader duplicate type fix");
 Console.WriteLine("https://github.com/LavaGang/MelonLoader/issues/1142");
@@ -33,10 +36,13 @@ if (affectedPaths.Count == 0)
     // Fall back to manual input
     if (string.IsNullOrEmpty(gamePath))
     {
-        Console.WriteLine(@"Enter the full path to your game folder:");
-        Console.WriteLine(@"  e.g.  C:\Program Files (x86)\Steam\steamapps\common\My Game");
+        Console.WriteLine("Enter the full path to your game folder:");
+        Console.WriteLine(RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? @"  e.g.  C:\Program Files (x86)\Steam\steamapps\common\My Game"
+            : "  e.g.  ~/.steam/steam/steamapps/common/My Game");
         Console.Write("> ");
         gamePath = Console.ReadLine()?.Trim().Trim('"') ?? "";
+        gamePath = ExpandHome(gamePath);
     }
 
     string candidate = Path.Combine(gamePath, RELATIVE_PATH);
@@ -157,7 +163,7 @@ static List<string> FindAllAffectedPaths()
     var results = new List<string>();
 
     // 1. Check if the tool is placed directly in a game folder
-    string localCandidate = Path.Combine(AppContext.BaseDirectory, RELATIVE_PATH);
+    string localCandidate = Path.Combine(AppContext.BaseDirectory, GamePaths.RelativeCoreModule);
     if (File.Exists(localCandidate))
     {
         try
@@ -172,23 +178,39 @@ static List<string> FindAllAffectedPaths()
         catch { /* unreadable — skip */ }
     }
 
-    // 2. Gather Steam library roots
-    var libraryRoots = new List<string>
+    // 2. Gather Steam library roots (platform-specific default locations)
+    var libraryRoots = new List<string>();
+
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     {
-        @"C:\Program Files (x86)\Steam\steamapps\common",
-        @"C:\Program Files\Steam\steamapps\common",
-        @"D:\Steam\steamapps\common",
-        @"D:\SteamLibrary\steamapps\common",
-        @"E:\Steam\steamapps\common",
-        @"E:\SteamLibrary\steamapps\common",
-    };
+        foreach (char drive in new[] { 'C', 'D', 'E' })
+        {
+            libraryRoots.Add($@"{drive}:\Program Files (x86)\Steam\steamapps\common");
+            libraryRoots.Add($@"{drive}:\Program Files\Steam\steamapps\common");
+            libraryRoots.Add($@"{drive}:\Steam\steamapps\common");
+            libraryRoots.Add($@"{drive}:\SteamLibrary\steamapps\common");
+        }
+    }
+    else
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            libraryRoots.Add(Path.Combine(home, "Library", "Application Support",
+                "Steam", "steamapps", "common"));
+        }
+        else // Linux and other Unix-likes
+        {
+            libraryRoots.Add(Path.Combine(home, ".steam", "steam", "steamapps", "common"));
+            libraryRoots.Add(Path.Combine(home, ".local", "share", "Steam", "steamapps", "common"));
+            libraryRoots.Add(Path.Combine(home, ".var", "app", "com.valvesoftware.Steam",
+                ".local", "share", "Steam", "steamapps", "common")); // Flatpak
+        }
+    }
 
     try
     {
-        string steamPath = (string)Registry.GetValue(
-            @"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null)
-            ?? (string)Registry.GetValue(
-            @"HKEY_CURRENT_USER\SOFTWARE\Valve\Steam", "SteamPath", null);
+        string steamPath = FindSteamInstallPath();
 
         if (steamPath != null)
         {
@@ -202,6 +224,7 @@ static List<string> FindAllAffectedPaths()
                     string trimmed = line.Trim();
                     if (trimmed.StartsWith("\"path\""))
                     {
+                        // VDF escapes backslashes as "\\"; harmless on Unix paths.
                         string libPath = trimmed.Split('"')[3].Replace(@"\\", @"\");
                         libraryRoots.Add(Path.Combine(libPath, "steamapps", "common"));
                     }
@@ -209,7 +232,7 @@ static List<string> FindAllAffectedPaths()
             }
         }
     }
-    catch { /* registry unavailable — continue */ }
+    catch { /* Steam not found — continue */ }
 
     // 3. Scan every game folder in every library root for the DLL
     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -220,7 +243,7 @@ static List<string> FindAllAffectedPaths()
         {
             foreach (string gameDir in Directory.GetDirectories(root))
             {
-                string candidate = Path.Combine(gameDir, RELATIVE_PATH);
+                string candidate = Path.Combine(gameDir, GamePaths.RelativeCoreModule);
                 if (!File.Exists(candidate)) continue;
 
                 // Skip if we already found this path (e.g. local candidate)
@@ -242,6 +265,48 @@ static List<string> FindAllAffectedPaths()
     }
 
     return results;
+}
+
+// ── Steam install-path lookup (platform-specific) ────────────────────────────
+
+static string FindSteamInstallPath()
+{
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
+        return (string)Registry.GetValue(
+            @"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null)
+            ?? (string)Registry.GetValue(
+            @"HKEY_CURRENT_USER\SOFTWARE\Valve\Steam", "SteamPath", null);
+    }
+
+    string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    string[] candidates = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+        ? new[] { Path.Combine(home, "Library", "Application Support", "Steam") }
+        : new[]
+        {
+            Path.Combine(home, ".steam", "steam"),
+            Path.Combine(home, ".local", "share", "Steam"),
+            Path.Combine(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
+        };
+
+    foreach (string dir in candidates)
+        if (Directory.Exists(Path.Combine(dir, "steamapps")))
+            return dir;
+
+    return null;
+}
+
+// ── Expand a leading '~' to the user's home directory (Unix convention) ───────
+
+static string ExpandHome(string path)
+{
+    if (string.IsNullOrEmpty(path)) return path;
+    if (path == "~" || path.StartsWith("~/") || path.StartsWith(@"~\"))
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return path.Length == 1 ? home : Path.Combine(home, path.Substring(2));
+    }
+    return path;
 }
 
 // ── Folder picker (Windows COM) ──────────────────────────────────────────────
@@ -330,6 +395,16 @@ static bool ScanForDuplicates(byte[] data, bool verbose)
         }
     }
     return found;
+}
+
+// ── Cross-platform relative paths ────────────────────────────────────────────
+
+static class GamePaths
+{
+    // MelonLoader/Il2CppAssemblies/UnityEngine.CoreModule.dll, assembled with the
+    // host OS separator so it works on Windows, Linux and macOS alike.
+    public static readonly string RelativeCoreModule =
+        Path.Combine("MelonLoader", "Il2CppAssemblies", "UnityEngine.CoreModule.dll");
 }
 
 // ── Win32 P/Invoke for folder picker ─────────────────────────────────────────
