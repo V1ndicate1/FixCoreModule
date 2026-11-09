@@ -162,6 +162,10 @@ static List<string> FindAllAffectedPaths()
 {
     var results = new List<string>();
 
+    // Real (symlink-resolved) paths already found. On Linux ~/.steam/steam is usually a symlink to
+    // ~/.local/share/Steam, so the same game would otherwise be offered once per path.
+    var seenDlls = new HashSet<string>(StringComparer.Ordinal);
+
     // 1. Check if the tool is placed directly in a game folder
     string localCandidate = Path.Combine(AppContext.BaseDirectory, GamePaths.RelativeCoreModule);
     if (File.Exists(localCandidate))
@@ -173,6 +177,7 @@ static List<string> FindAllAffectedPaths()
             {
                 Console.WriteLine($"Found affected game: {Path.GetFileName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))}");
                 results.Add(localCandidate);
+                seenDlls.Add(RealPath(localCandidate));
             }
         }
         catch { /* unreadable — skip */ }
@@ -238,7 +243,7 @@ static List<string> FindAllAffectedPaths()
     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     foreach (string root in libraryRoots)
     {
-        if (!Directory.Exists(root) || !seen.Add(root)) continue;
+        if (!Directory.Exists(root) || !seen.Add(RealPath(root))) continue;
         try
         {
             foreach (string gameDir in Directory.GetDirectories(root))
@@ -246,8 +251,9 @@ static List<string> FindAllAffectedPaths()
                 string candidate = Path.Combine(gameDir, GamePaths.RelativeCoreModule);
                 if (!File.Exists(candidate)) continue;
 
-                // Skip if we already found this path (e.g. local candidate)
-                if (results.Contains(candidate)) continue;
+                // Skip if we already found this DLL (e.g. local candidate, or the same
+                // library reached through a symlink)
+                if (results.Contains(candidate) || seenDlls.Contains(RealPath(candidate))) continue;
 
                 try
                 {
@@ -256,6 +262,7 @@ static List<string> FindAllAffectedPaths()
                     {
                         Console.WriteLine($"Found affected game: {Path.GetFileName(gameDir)}");
                         results.Add(candidate);
+                        seenDlls.Add(RealPath(candidate));
                     }
                 }
                 catch { /* unreadable — skip */ }
@@ -294,6 +301,48 @@ static string FindSteamInstallPath()
             return dir;
 
     return null;
+}
+
+// ── Resolve symlinks in a path (Unix), so one folder reached two ways counts once ──
+
+static string RealPath(string path)
+{
+    try
+    {
+        string full = Path.GetFullPath(path);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return full;
+
+        // Walk the path one component at a time; when a component is a symlink,
+        // splice its target in and carry on. Bounded, so a symlink loop can't hang.
+        var parts = new List<string>(full.Split('/', StringSplitOptions.RemoveEmptyEntries));
+        string current = "/";
+        int i = 0, hops = 0;
+        while (i < parts.Count)
+        {
+            string next = Path.Combine(current, parts[i]);
+            string target = new FileInfo(next).LinkTarget;
+            if (target == null)
+            {
+                current = next;
+                i++;
+                continue;
+            }
+            if (++hops > 40)
+                return full;
+            string resolved = Path.GetFullPath(Path.IsPathRooted(target) ? target : Path.Combine(current, target));
+            var rest = parts.GetRange(i + 1, parts.Count - i - 1);
+            parts = new List<string>(resolved.Split('/', StringSplitOptions.RemoveEmptyEntries));
+            parts.AddRange(rest);
+            current = "/";
+            i = 0;
+        }
+        return current;
+    }
+    catch
+    {
+        return path;
+    }
 }
 
 // ── Expand a leading '~' to the user's home directory (Unix convention) ───────
